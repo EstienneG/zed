@@ -1,0 +1,111 @@
+name: Sync Zed upstream
+
+on:
+  schedule:
+    - cron: "0 7 * * *"
+    - cron: "0 8 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: sync-zed-upstream
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Paris schedule
+        id: schedule
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [[ "$EVENT_NAME" == "workflow_dispatch" || "$(TZ=Europe/Paris date +%H)" == "09" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check out fork
+        if: steps.schedule.outputs.run == 'true'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Open or update upstream sync pull request
+        if: steps.schedule.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/zed-industries/zed.git
+          git fetch origin main
+          git fetch upstream main
+
+          if git merge-base --is-ancestor upstream/main origin/main; then
+            echo "The fork is already current."
+            exit 0
+          fi
+
+          branch="$(
+            gh pr list \
+              --repo "$GITHUB_REPOSITORY" \
+              --state open \
+              --limit 100 \
+              --json headRefName \
+              --jq 'map(select(.headRefName | startswith("automation/upstream-sync-")))[0].headRefName // ""'
+          )"
+
+          if [[ -n "$branch" ]]; then
+            git fetch origin "$branch"
+            git checkout -B "$branch" "origin/$branch"
+          else
+            branch="automation/upstream-sync-$(date -u +%Y-%m-%d)"
+            git checkout -B "$branch" origin/main
+          fi
+
+          before_sha="$(git rev-parse origin/main)"
+          after_sha="$(git rev-parse upstream/main)"
+          common_sha="$(git merge-base origin/main upstream/main)"
+          commit_count="$(git rev-list --count origin/main..upstream/main)"
+
+          git merge --no-edit upstream/main
+          git push --set-upstream origin "$branch"
+
+          title="Sync Zed upstream ($(date -u +%Y-%m-%d))"
+          compare_url="https://github.com/zed-industries/zed/compare/${common_sha}...${after_sha}"
+          body_file="$(mktemp)"
+          {
+            echo "Automated synchronization with \`zed-industries/zed\`."
+            echo
+            echo "- Upstream commits: ${commit_count}"
+            echo "- Previous fork commit: \`${before_sha}\`"
+            echo "- Upstream commit: \`${after_sha}\`"
+            echo "- [Review upstream changes](${compare_url})"
+            echo
+            echo "This workflow does not merge the pull request automatically."
+            echo
+            echo "Release Notes:"
+            echo
+            echo "- N/A"
+          } > "$body_file"
+
+          if gh pr view "$branch" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh pr edit "$branch" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$title" \
+              --body-file "$body_file"
+          else
+            gh pr create \
+              --repo "$GITHUB_REPOSITORY" \
+              --base main \
+              --head "$branch" \
+              --title "$title" \
+              --body-file "$body_file"
+          fi
