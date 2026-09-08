@@ -198,15 +198,21 @@ fn render_agent(
         ExternalAgentSource::Custom => "Remove Custom Agent",
     };
 
-    let remove_button = IconButton::new(format!("uninstall-{}", id_string), IconName::Trash)
-        .icon_color(Color::Muted)
-        .icon_size(IconSize::Small)
-        .size(ButtonSize::Medium)
-        .tab_index(0isize)
-        .tooltip(Tooltip::text(remove_tooltip))
-        .on_click(move |_event, _window, cx| {
-            remove_agent(&id, source, cx);
-        });
+    let is_default_agent = SettingsStore::global(cx)
+        .get_content_for_file(settings::SettingsFile::Default)
+        .and_then(|settings| settings.agent_servers.as_ref())
+        .is_some_and(|agent_servers| agent_servers.contains_key(id.0.as_ref()));
+    let remove_button = (!is_default_agent).then(|| {
+        IconButton::new(format!("uninstall-{}", id_string), IconName::Trash)
+            .icon_color(Color::Muted)
+            .icon_size(IconSize::Small)
+            .size(ButtonSize::Medium)
+            .tab_index(0isize)
+            .tooltip(Tooltip::text(remove_tooltip))
+            .on_click(move |_event, _window, cx| {
+                remove_agent(&id, source, cx);
+            })
+    });
 
     // The connection status of an external agent is tracked per agent-panel
     // session (via the agent panel's `AgentConnectionStore`), which isn't
@@ -220,7 +226,7 @@ fn render_agent(
     )
     .icon(icon)
     .when_some(configure_button, |this, button| this.action(button))
-    .action(remove_button)
+    .when_some(remove_button, |this, button| this.action(button))
 }
 
 fn remove_agent(id: &AgentId, source: ExternalAgentSource, cx: &mut App) {

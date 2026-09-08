@@ -5,9 +5,9 @@ use collections::HashMap;
 use editor::{Editor, EditorElement, EditorStyle};
 use fs::Fs;
 use gpui::{
-    AnyElement, App, Context, Entity, EventEmitter, Focusable, KeyContext, ParentElement, Render,
-    RenderOnce, SharedString, Styled, TextStyle, UniformListScrollHandle, Window, point,
-    uniform_list,
+    AnyElement, App, Context, Entity, EventEmitter, Focusable, KeyContext, ParentElement,
+    ReadGlobal as _, Render, RenderOnce, SharedString, Styled, TextStyle, UniformListScrollHandle,
+    Window, point, uniform_list,
 };
 use project::agent_server_store::{AllAgentServersSettings, CustomAgentServerSettings};
 use project::{AgentRegistryStore, RegistryAgent};
@@ -503,6 +503,11 @@ impl AgentRegistryPage {
                 .disabled(true);
         }
 
+        let is_default_agent = SettingsStore::global(cx)
+            .get_content_for_file(settings::SettingsFile::Default)
+            .and_then(|settings| settings.agent_servers.as_ref())
+            .is_some_and(|agent_servers| agent_servers.contains_key(agent.id().as_ref()));
+
         match install_status {
             RegistryInstallStatus::NotInstalled => {
                 let fs = <dyn Fs>::global(cx);
@@ -538,6 +543,11 @@ impl AgentRegistryPage {
                     })
             }
             RegistryInstallStatus::InstalledRegistry => {
+                if is_default_agent {
+                    return Button::new(button_id, "Installed")
+                        .style(ButtonStyle::OutlinedGhost)
+                        .disabled(true);
+                }
                 let fs = <dyn Fs>::global(cx);
                 let agent_id = agent.id().to_string();
                 Button::new(button_id, "Remove")

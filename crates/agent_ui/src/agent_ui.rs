@@ -465,6 +465,9 @@ impl Agent {
     pub fn label(&self) -> SharedString {
         match self {
             Self::NativeAgent => "Zed Agent".into(),
+            Self::Custom { id } if id.as_ref() == agent_servers::MISTRAL_VIBE_ID => {
+                "Mistral Vibe".into()
+            }
             Self::Custom { id, .. } => id.0.clone(),
             #[cfg(any(test, feature = "test-support"))]
             Self::Stub => "Stub Agent".into(),

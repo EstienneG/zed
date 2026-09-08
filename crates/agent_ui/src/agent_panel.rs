@@ -1418,8 +1418,17 @@ impl AgentPanel {
                             agent
                         }
                     };
-                    let global_fallback =
-                        global_last_used_agent.filter(|agent| !is_via_collab || agent.is_native());
+                    let normalize_selection = |agent: Agent| {
+                        if is_via_collab {
+                            Agent::NativeAgent
+                        } else if agent.is_native() {
+                            default_local_agent(cx)
+                        } else {
+                            agent
+                        }
+                    };
+                    let global_fallback = global_last_used_agent
+                        .map(|agent| normalize_selection(agent));
 
                     if let Some(serialized_panel) = &serialized_panel {
                         panel.last_created_entry_kind = serialized_panel.last_created_entry_kind;
@@ -1444,7 +1453,7 @@ impl AgentPanel {
                         serialized_panel
                             .as_ref()
                             .and_then(|p| p.selected_agent.clone())
-                            .map(clamp)
+                            .map(|agent| normalize_selection(agent))
                             .filter(|agent| panel.should_restore_agent(agent, cx))
                             .or_else(|| {
                                 global_fallback
@@ -1565,6 +1574,12 @@ impl AgentPanel {
         })
         .detach();
 
+        let selected_agent = if project.read(cx).is_via_collab() {
+            Agent::NativeAgent
+        } else {
+            default_local_agent(cx)
+        };
+
         let panel = Self {
             workspace_id,
             base_view,
@@ -1591,7 +1606,7 @@ impl AgentPanel {
             pending_serialization: None,
             new_user_onboarding: onboarding,
             thread_store,
-            selected_agent: Agent::default(),
+            selected_agent,
             _thread_view_subscription: None,
             _active_thread_focus_subscription: None,
             new_user_onboarding_upsell_dismissed: AtomicBool::new(OnboardingUpsell::dismissed(cx)),
@@ -1667,6 +1682,14 @@ impl AgentPanel {
         }
     }
 
+    fn default_agent(&self, cx: &App) -> Agent {
+        if self.project.read(cx).is_via_collab() {
+            Agent::NativeAgent
+        } else {
+            default_local_agent(cx)
+        }
+    }
+
     fn should_restore_agent(&self, agent: &Agent, cx: &App) -> bool {
         let Agent::Custom { id } = agent else {
             return true;
@@ -1679,10 +1702,13 @@ impl AgentPanel {
 
     fn restorable_agent_selection(&self, cx: &App) -> Agent {
         let agent = self.selected_agent(cx);
+        if agent.is_native() && !self.project.read(cx).is_via_collab() {
+            return self.default_agent(cx);
+        }
         if self.should_restore_agent(&agent, cx) {
             agent
         } else {
-            Agent::NativeAgent
+            self.default_agent(cx)
         }
     }
 
@@ -4986,6 +5012,16 @@ fn agent_panel_dock_position(cx: &App) -> DockPosition {
     AgentSettings::get_global(cx).dock.into()
 }
 
+fn default_local_agent(cx: &App) -> Agent {
+    if AllAgentServersSettings::get_global(cx).contains_key(agent_servers::MISTRAL_VIBE_ID) {
+        Agent::Custom {
+            id: agent_servers::MISTRAL_VIBE_ID.into(),
+        }
+    } else {
+        Agent::NativeAgent
+    }
+}
+
 pub enum AgentPanelEvent {
     ActiveViewChanged,
     ActiveViewFocused,
@@ -5882,37 +5918,6 @@ impl AgentPanel {
             Rc::new(move |window, cx| {
                 Some(ContextMenu::build(window, cx, |menu, _window, cx| {
                     menu.context(focus_handle.clone())
-                        .item(
-                            ContextMenuEntry::new("Zed Agent")
-                                .when(
-                                    !showing_terminal && is_agent_selected(Agent::NativeAgent),
-                                    |this| this.action(Box::new(NewThread)),
-                                )
-                                .icon(IconName::ZedAgent)
-                                .icon_color(Color::Muted)
-                                .handler({
-                                    let workspace = workspace.clone();
-                                    move |window, cx| {
-                                        if let Some(workspace) = workspace.upgrade() {
-                                            workspace.update(cx, |workspace, cx| {
-                                                if let Some(panel) =
-                                                    workspace.panel::<AgentPanel>(cx)
-                                                {
-                                                    panel.update(cx, |panel, cx| {
-                                                        panel.selected_agent = Agent::NativeAgent;
-                                                        panel.activate_new_thread(
-                                                            true,
-                                                            AgentThreadSource::AgentPanel,
-                                                            window,
-                                                            cx,
-                                                        );
-                                                    });
-                                                }
-                                            });
-                                        }
-                                    }
-                                }),
-                        )
                         .when(supports_terminal, |menu| {
                             menu.item(
                                 ContextMenuEntry::new("Terminal")
@@ -6927,6 +6932,20 @@ mod tests {
                     agent_servers.remove(id);
                 }
             });
+        });
+    }
+
+    #[gpui::test]
+    fn test_default_local_agent_is_mistral_vibe(cx: &mut TestAppContext) {
+        init_test(cx);
+
+        cx.update(|cx| {
+            assert_eq!(
+                default_local_agent(cx),
+                Agent::Custom {
+                    id: agent_servers::MISTRAL_VIBE_ID.into(),
+                }
+            );
         });
     }
 
@@ -11639,10 +11658,10 @@ mod tests {
             .expect("panel load should succeed");
         cx.run_until_parked();
 
-        panel.read_with(cx, |panel, _cx| {
+        panel.read_with(cx, |panel, cx| {
             assert_eq!(
                 panel.selected_agent,
-                Agent::NativeAgent,
+                default_local_agent(cx),
                 "a workspace should not inherit a last-used agent that is no longer installed"
             );
         });
@@ -11763,10 +11782,10 @@ mod tests {
         });
         cx.run_until_parked();
 
-        panel_b.read_with(cx, |panel, _cx| {
+        panel_b.read_with(cx, |panel, cx| {
             assert_eq!(
                 panel.selected_agent,
-                Agent::NativeAgent,
+                default_local_agent(cx),
                 "a newly opened project should not inherit an uninstalled agent"
             );
         });
@@ -11899,12 +11918,12 @@ mod tests {
             );
             assert_eq!(
                 *draft.read(cx).agent_key(),
-                Agent::NativeAgent,
+                default_local_agent(cx),
                 "a restored draft should drop an uninstalled agent"
             );
             assert_eq!(
                 panel.selected_agent,
-                Agent::NativeAgent,
+                default_local_agent(cx),
                 "the panel should not stay selected on the uninstalled agent"
             );
         });
@@ -12161,16 +12180,16 @@ mod tests {
             panel
         });
 
-        // Create a draft with the default NativeAgent.
+        // Create a draft with the default agent.
         panel.update_in(cx, |panel, window, cx| {
             panel.activate_draft(true, AgentThreadSource::AgentPanel, window, cx);
         });
 
         let first_draft_id = panel.read_with(cx, |panel, cx| {
             assert!(panel.draft_thread.is_some());
-            assert_eq!(panel.selected_agent, Agent::NativeAgent);
+            assert_eq!(panel.selected_agent, default_local_agent(cx));
             let draft = panel.draft_thread.as_ref().unwrap();
-            assert_eq!(*draft.read(cx).agent_key(), Agent::NativeAgent);
+            assert_eq!(*draft.read(cx).agent_key(), default_local_agent(cx));
             draft.entity_id()
         });
 
@@ -13789,7 +13808,7 @@ mod tests {
             let draft = panel.draft_thread.as_ref().expect("draft should exist");
             assert_eq!(
                 *draft.read(cx).agent_key(),
-                Agent::NativeAgent,
+                default_local_agent(cx),
                 "destination draft should start on the default agent"
             );
             draft.entity_id()
