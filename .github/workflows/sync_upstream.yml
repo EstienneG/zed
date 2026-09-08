@@ -31,7 +31,7 @@ jobs:
 
       - name: Check out fork
         if: steps.schedule.outputs.run == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -65,6 +65,7 @@ jobs:
           if [[ -n "$branch" ]]; then
             git fetch origin "$branch"
             git checkout -B "$branch" "origin/$branch"
+            git merge --no-edit origin/main
           else
             branch="automation/upstream-sync-$(date -u +%Y-%m-%d)"
             git checkout -B "$branch" origin/main
