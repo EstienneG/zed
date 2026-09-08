@@ -18,6 +18,7 @@ pub const GEMINI_ID: &str = "gemini";
 pub const CLAUDE_AGENT_ID: &str = "claude-acp";
 pub const CODEX_ID: &str = "codex-acp";
 pub const CURSOR_ID: &str = "cursor";
+pub const MISTRAL_VIBE_ID: &str = "mistral-vibe";
 
 /// A generic agent server implementation for custom user-defined agents
 pub struct CustomAgentServer {
